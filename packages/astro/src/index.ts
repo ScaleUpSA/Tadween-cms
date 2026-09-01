@@ -3,6 +3,7 @@ export {
   collection,
   singleton,
   fields,
+  seoFields,
   compileSchema,
   frontmatterSchema,
   resolveLocale,

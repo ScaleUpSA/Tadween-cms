@@ -49,6 +49,27 @@ export const fields = {
   }),
 };
 
+/**
+ * Reusable SEO field group: bilingual meta title/description plus an OG image.
+ * Spread into a type's fields: `fields: { title: ..., ...seoFields() }`.
+ * Produces `seo_title_<locale>`, `seo_description_<locale>`, and `og_image` keys.
+ */
+export function seoFields(): Record<string, Field> {
+  return {
+    seo_title: fields.text({
+      label: { ar: 'عنوان السيو', en: 'Meta title' },
+      bilingual: true,
+    }),
+    seo_description: fields.textarea({
+      label: { ar: 'وصف السيو', en: 'Meta description' },
+      bilingual: true,
+    }),
+    og_image: fields.image({
+      label: { ar: 'صورة المشاركة', en: 'Social share image' },
+    }),
+  };
+}
+
 export interface Collection {
   type: 'collection';
   label: Label;

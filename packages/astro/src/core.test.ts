@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseFrontmatter, serializeFrontmatter } from './frontmatter.js';
 import { joinBody, renderMarkdown, splitBody } from './markdown.js';
-import { collection, fields, frontmatterSchema, resolveLocale } from './schema.js';
+import { collection, fields, frontmatterSchema, resolveLocale, seoFields } from './schema.js';
 
 describe('frontmatter', () => {
   it('round-trips data and body', () => {
@@ -57,5 +57,31 @@ describe('schema validation', () => {
     const data = { title_ar: 'مرحبا', status: 'published' };
     expect(resolveLocale(data, blog, 'en', 'ar').title).toBe('مرحبا');
     expect(resolveLocale(data, blog, 'ar', 'ar').title).toBe('مرحبا');
+  });
+});
+
+describe('seo field group', () => {
+  it('provides bilingual meta fields and an og image', () => {
+    const group = seoFields();
+    expect(Object.keys(group)).toEqual(['seo_title', 'seo_description', 'og_image']);
+    expect(group.seo_title).toMatchObject({ kind: 'text', bilingual: true });
+    expect(group.seo_description).toMatchObject({ kind: 'textarea', bilingual: true });
+    expect(group.og_image).toMatchObject({ kind: 'image' });
+  });
+
+  it('resolves locale-suffixed seo values', () => {
+    const type = collection({
+      label: { ar: 'مدونة', en: 'Blog' },
+      slug: 'blog',
+      fields: { title: fields.text({ bilingual: true }), ...seoFields() },
+    });
+    const resolved = resolveLocale(
+      { title_ar: 'عنوان', seo_title_ar: 'سيو', seo_title_en: 'seo', og_image: 'x.png' },
+      type,
+      'ar',
+      'en',
+    );
+    expect(resolved.seo_title).toBe('سيو');
+    expect(resolved.og_image).toBe('x.png');
   });
 });

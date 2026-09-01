@@ -4,6 +4,10 @@ name = "tadween-dashboard"
 main = "src/index.tsx"
 compatibility_date = "2026-08-01"
 
+# Scheduled publishing: check for due drafts every 5 minutes.
+[triggers]
+crons = ["*/5 * * * *"]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "tadween"
@@ -20,3 +24,9 @@ bucket_name = "tadween-media"
 # Secrets (set with `wrangler secret put <NAME>`):
 #   CF_API_TOKEN            - zone token with Cache Purge permission (for purge-on-publish)
 #   TADWEEN_PREVIEW_SECRET  - random string shared with each site worker (for preview links)
+#   RESEND_API_KEY          - Resend API key (for magic-link login, password reset, invites)
+#
+# Plain vars (optional, set under [vars]):
+#   EMAIL_FROM     - sender address for emails, e.g. "Tadween <no-reply@example.com>"
+#   DASHBOARD_URL  - public URL of this dashboard (used in email links)
+#   BRAND_NAME     - white-label brand name shown in the UI and emails
