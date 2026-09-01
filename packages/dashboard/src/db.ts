@@ -57,6 +57,10 @@ export async function deleteSession(db: D1Database, sessionId: string): Promise<
   await db.prepare('DELETE FROM sessions WHERE id = ?').bind(sessionId).run();
 }
 
+export async function deleteAllSessions(db: D1Database, userId: string): Promise<void> {
+  await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId).run();
+}
+
 export async function isLockedOut(db: D1Database, email: string): Promise<boolean> {
   const row = await db
     .prepare('SELECT attempts, locked_until FROM login_attempts WHERE email = ?')
@@ -106,6 +110,25 @@ export async function getSiteForUser(
 ): Promise<Site | null> {
   const sites = await sitesForUser(db, user);
   return sites.find((s) => s.id === siteId) ?? null;
+}
+
+export interface AuditRow {
+  action: string;
+  target: string;
+  created_at: string;
+  email: string;
+}
+
+export async function listAudit(db: D1Database, siteId: string, limit = 100): Promise<AuditRow[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT a.action, a.target, a.created_at, COALESCE(u.email, a.user_id) AS email
+       FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+       WHERE a.site_id = ? ORDER BY a.id DESC LIMIT ?`,
+    )
+    .bind(siteId, limit)
+    .all<AuditRow>();
+  return results;
 }
 
 export async function audit(

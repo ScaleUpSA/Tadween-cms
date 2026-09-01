@@ -6,11 +6,13 @@ import {
   audit,
   clearLoginFailures,
   createSession,
+  deleteAllSessions,
   deleteSession,
   findUserByEmail,
   getSessionUser,
   getSiteForUser,
   isLockedOut,
+  listAudit,
   recordLoginFailure,
   sitesForUser,
 } from './db.js';
@@ -20,13 +22,30 @@ import { t, type UiLang } from './i18n.js';
 import { purgePublish } from './purge.js';
 import {
   deleteEntry,
+  exportContent,
+  importContent,
   listEntries,
+  listMedia,
+  listRevisions,
   loadEntry,
   loadSchema,
   publishEntry,
+  revertToRevision,
   saveDraft,
+  type ContentBundle,
 } from './store.js';
-import { CollectionPage, EntryForm, Layout, LoginPage, SiteHome, SitesPage } from './views.js';
+import {
+  AuditPage,
+  CollectionPage,
+  EntryForm,
+  Layout,
+  LoginPage,
+  MediaPage,
+  RevisionsPage,
+  SiteHome,
+  SitesPage,
+  TransferPage,
+} from './views.js';
 
 const SESSION_COOKIE = 'tadween_session';
 
@@ -98,7 +117,12 @@ app.use('*', async (c, next) => {
 });
 
 app.post('/logout', async (c) => {
-  await deleteSession(c.env.DB, c.get('session').id);
+  const form = await c.req.formData();
+  if (form.get('all')) {
+    await deleteAllSessions(c.env.DB, c.get('user').id);
+  } else {
+    await deleteSession(c.env.DB, c.get('session').id);
+  }
   deleteCookie(c, SESSION_COOKIE, { path: '/' });
   return c.redirect('/login');
 });
@@ -168,6 +192,157 @@ async function previewUrl(env: Env, site: Site, type: ContentType, typeKey: stri
   return `${site.base_url.replace(/\/$/, '')}${path}?tadween-preview=${token}`;
 }
 
+async function referenceOptions(
+  c: AppContext,
+  schema: CompiledSchema,
+  type: ContentType,
+): Promise<Record<string, { value: string; label: string }[]>> {
+  const site = c.get('site');
+  const out: Record<string, { value: string; label: string }[]> = {};
+  for (const [name, field] of Object.entries(type.fields)) {
+    if (field.kind !== 'reference') continue;
+    const target = schema.content[field.to];
+    if (!target || target.type !== 'collection') continue;
+    const entries = await listEntries(c.env, site, schema, field.to, target);
+    out[name] = entries.map((e) => ({ value: e.slug, label: e.title || e.slug }));
+  }
+  return out;
+}
+
+// --- media library ---
+app.get('/sites/:siteId/_media', async (c) => {
+  const site = c.get('site');
+  const files = await listMedia(c.env, site);
+  return c.html(
+    <MediaPage
+      lang={c.get('lang')}
+      user={c.get('user')}
+      site={site}
+      files={files}
+      csrf={c.get('session').csrf_token}
+    />,
+  );
+});
+
+app.post('/sites/:siteId/_media', async (c) => {
+  const site = c.get('site');
+  const lang = c.get('lang');
+  const form = await c.req.formData();
+  const file = form.get('file') as unknown as File | string | null;
+  if (!file || typeof file === 'string') return c.text('no file', 400);
+  if (!file.type.startsWith('image/')) return c.text('images only', 415);
+  if (file.size > 10 * 1024 * 1024) return c.text('max 10MB', 413);
+  const safeName = file.name.replace(/[^\w.\-\u0600-\u06ff]+/g, '-');
+  const key = `${Date.now()}-${safeName}`;
+  const customMetadata: Record<string, string> = {};
+  const altAr = String(form.get('alt__ar') ?? '').trim();
+  const altEn = String(form.get('alt__en') ?? '').trim();
+  if (altAr) customMetadata.alt_ar = altAr;
+  if (altEn) customMetadata.alt_en = altEn;
+  await c.env.MEDIA.put(`${site.prefix}/media/${key}`, file.stream(), {
+    httpMetadata: { contentType: file.type },
+    customMetadata,
+  });
+  await audit(c.env, c.get('user').id, site.id, 'upload', key);
+  return c.redirect(`/sites/${site.id}/_media?lang=${lang}`);
+});
+
+app.post('/sites/:siteId/_media/delete', async (c) => {
+  const site = c.get('site');
+  const form = await c.req.formData();
+  const key = String(form.get('key') ?? '');
+  if (!key || key.includes('..') || key.includes('/')) return c.text('bad key', 400);
+  await c.env.MEDIA.delete(`${site.prefix}/media/${key}`);
+  await audit(c.env, c.get('user').id, site.id, 'delete-media', key);
+  return c.redirect(`/sites/${site.id}/_media?lang=${c.get('lang')}`);
+});
+
+app.get('/sites/:siteId/_media/file/:key', async (c) => {
+  const site = c.get('site');
+  const key = c.req.param('key');
+  if (!key || key.includes('..')) return c.notFound();
+  const object = await c.env.MEDIA.get(`${site.prefix}/media/${key}`);
+  if (!object) return c.notFound();
+  return new Response(object.body, {
+    headers: {
+      'Content-Type': object.httpMetadata?.contentType ?? 'application/octet-stream',
+      'Cache-Control': 'private, max-age=3600',
+    },
+  });
+});
+
+// --- audit log (owners only) ---
+app.get('/sites/:siteId/_audit', async (c) => {
+  if (c.get('user').role !== 'owner') return c.notFound();
+  const site = c.get('site');
+  const rows = await listAudit(c.env.DB, site.id);
+  return c.html(<AuditPage lang={c.get('lang')} user={c.get('user')} site={site} rows={rows} />);
+});
+
+// --- export / import (owners only) ---
+app.get('/sites/:siteId/_transfer', (c) => {
+  if (c.get('user').role !== 'owner') return c.notFound();
+  return c.html(
+    <TransferPage
+      lang={c.get('lang')}
+      user={c.get('user')}
+      site={c.get('site')}
+      csrf={c.get('session').csrf_token}
+    />,
+  );
+});
+
+app.get('/sites/:siteId/_export.json', async (c) => {
+  if (c.get('user').role !== 'owner') return c.notFound();
+  const site = c.get('site');
+  const bundle = await exportContent(c.env, site);
+  await audit(c.env, c.get('user').id, site.id, 'export', site.prefix);
+  return c.body(JSON.stringify(bundle, null, 2), 200, {
+    'Content-Type': 'application/json',
+    'Content-Disposition': `attachment; filename="tadween-${site.prefix}.json"`,
+  });
+});
+
+app.post('/sites/:siteId/_import', async (c) => {
+  if (c.get('user').role !== 'owner') return c.notFound();
+  const site = c.get('site');
+  const lang = c.get('lang');
+  const form = await c.req.formData();
+  const file = form.get('bundle') as unknown as File | string | null;
+  const fail = (text: string) =>
+    c.html(
+      <TransferPage
+        lang={lang}
+        user={c.get('user')}
+        site={site}
+        csrf={c.get('session').csrf_token}
+        flash={{ text, error: true }}
+      />,
+      400,
+    );
+  if (!file || typeof file === 'string') return fail('no file');
+  let bundle: ContentBundle;
+  try {
+    bundle = JSON.parse(await file.text()) as ContentBundle;
+  } catch {
+    return fail('invalid JSON');
+  }
+  if (bundle.version !== 1 || typeof bundle.files !== 'object' || bundle.files === null) {
+    return fail('invalid bundle');
+  }
+  const count = await importContent(c.env, site, bundle);
+  await audit(c.env, c.get('user').id, site.id, 'import', `${count} files`);
+  return c.html(
+    <TransferPage
+      lang={lang}
+      user={c.get('user')}
+      site={site}
+      csrf={c.get('session').csrf_token}
+      flash={{ text: `${t(lang, 'importDone')} (${count})` }}
+    />,
+  );
+});
+
 app.get('/sites/:siteId/:typeKey', async (c) => {
   const ctx = await typeContext(c);
   if (!ctx) return c.notFound();
@@ -185,6 +360,7 @@ app.get('/sites/:siteId/:typeKey', async (c) => {
         entry={entry}
         csrf={c.get('session').csrf_token}
         previewUrl={await previewUrl(c.env, site, type, typeKey)}
+        refOptions={await referenceOptions(c, schema, type)}
       />,
     );
   }
@@ -223,8 +399,59 @@ app.get('/sites/:siteId/:typeKey/:slug', async (c) => {
       entry={entry}
       csrf={c.get('session').csrf_token}
       previewUrl={slug === 'new' ? undefined : await previewUrl(c.env, site, type, typeKey, slug)}
+      refOptions={await referenceOptions(c, schema, type)}
     />,
   );
+});
+
+// --- revisions ---
+app.get('/sites/:siteId/:typeKey/:slug/revisions', async (c) => {
+  const ctx = await typeContext(c);
+  if (!ctx) return c.notFound();
+  const { site, typeKey, type } = ctx;
+  const slugParam = c.req.param('slug');
+  const revSlug = type.type === 'singleton' ? typeKey : slugParam;
+  const revisions = await listRevisions(c.env, site, typeKey, revSlug);
+  return c.html(
+    <RevisionsPage
+      lang={c.get('lang')}
+      user={c.get('user')}
+      site={site}
+      typeKey={typeKey}
+      type={type}
+      slug={type.type === 'singleton' ? undefined : slugParam}
+      revisions={revisions}
+      csrf={c.get('session').csrf_token}
+    />,
+  );
+});
+
+app.post('/sites/:siteId/:typeKey/:slug/revert', async (c) => {
+  const ctx = await typeContext(c);
+  if (!ctx) return c.notFound();
+  const { site, schema, typeKey, type } = ctx;
+  const lang = c.get('lang');
+  const slugParam = c.req.param('slug');
+  const slug = type.type === 'singleton' ? undefined : slugParam;
+  const form = await c.req.formData();
+  const revisionKey = String(form.get('rev') ?? '');
+  const ok = await revertToRevision(c.env, site, typeKey, type, slug, revisionKey);
+  if (!ok) return c.text('Invalid revision', 400);
+  const target = type.type === 'singleton' ? typeKey : `${typeKey}/${slug}`;
+  await audit(c.env, c.get('user').id, site.id, 'revert', target);
+  const purge = await purgePublish(
+    c.env.CF_API_TOKEN,
+    site,
+    schema,
+    typeKey,
+    type.type === 'singleton' ? typeKey : (slug ?? ''),
+  );
+  if (!purge.ok && purge.detail) console.warn(`[tadween] ${purge.detail}`);
+  const editPath =
+    type.type === 'singleton'
+      ? `/sites/${site.id}/${typeKey}?lang=${lang}`
+      : `/sites/${site.id}/${typeKey}/${slug}?lang=${lang}`;
+  return c.redirect(editPath);
 });
 
 async function handleWrite(c: AppContext, slugParam?: string): Promise<Response> {

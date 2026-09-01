@@ -23,6 +23,7 @@ export type Field =
   | ({ kind: 'date' } & BaseFieldOptions)
   | ({ kind: 'select'; options: { value: string; label: Label }[] } & BaseFieldOptions)
   | ({ kind: 'image' } & BaseFieldOptions)
+  | ({ kind: 'reference'; to: string } & BaseFieldOptions)
   | ({ kind: 'list'; fields: Record<string, Field> } & BaseFieldOptions);
 
 export const fields = {
@@ -40,6 +41,8 @@ export const fields = {
     ...opts,
   }),
   image: (opts: BaseFieldOptions = {}): Field => ({ kind: 'image', ...opts }),
+  /** A link to an entry in another collection; stores the referenced entry's slug. */
+  reference: (opts: BaseFieldOptions & { to: string }): Field => ({ kind: 'reference', ...opts }),
   list: (opts: BaseFieldOptions & { fields: Record<string, Field> }): Field => ({
     kind: 'list',
     ...opts,
@@ -110,6 +113,7 @@ function fieldZod(field: Field, locales: Locale[]): z.ZodTypeAny {
     case 'textarea':
     case 'markdown':
     case 'image':
+    case 'reference':
       base = z.string();
       break;
     case 'number':

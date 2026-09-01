@@ -159,6 +159,110 @@ async function pruneRevisions(env: Env, site: Site, typeKey: string, slug: strin
   if (excess.length) await Promise.all(excess.map((k) => env.CONTENT.delete(k)));
 }
 
+export interface RevisionSummary {
+  key: string;
+  timestamp: string;
+}
+
+export async function listRevisions(
+  env: Env,
+  site: Site,
+  typeKey: string,
+  slug: string,
+): Promise<RevisionSummary[]> {
+  const listed = await env.CONTENT.list({
+    prefix: paths.revisionPrefix(site.prefix, typeKey, slug),
+    limit: 1000,
+  });
+  return listed.objects
+    .map((o) => ({ key: o.key, timestamp: paths.slugFromKey(o.key) }))
+    .sort((a, b) => b.key.localeCompare(a.key));
+}
+
+/** Publishes the given revision in place of the current version (which itself becomes a revision). */
+export async function revertToRevision(
+  env: Env,
+  site: Site,
+  typeKey: string,
+  type: ContentType,
+  slug: string | undefined,
+  revisionKey: string,
+): Promise<boolean> {
+  const revSlug = type.type === 'singleton' ? typeKey : (slug ?? '');
+  if (!revisionKey.startsWith(paths.revisionPrefix(site.prefix, typeKey, revSlug))) return false;
+  const revision = await env.CONTENT.get(revisionKey);
+  if (!revision) return false;
+  const { data, body } = parseFrontmatter(await revision.text());
+  await publishEntry(env, site, typeKey, type, slug, data, body);
+  return true;
+}
+
+export interface MediaFile {
+  key: string;
+  size: number;
+  uploaded: string;
+  contentType: string;
+  alt: Record<string, string>;
+}
+
+export async function listMedia(env: Env, site: Site): Promise<MediaFile[]> {
+  const listed = await env.MEDIA.list({
+    prefix: `${site.prefix}/media/`,
+    limit: 1000,
+    include: ['httpMetadata', 'customMetadata'],
+  });
+  return listed.objects
+    .map((o) => {
+      const alt: Record<string, string> = {};
+      for (const [k, v] of Object.entries(o.customMetadata ?? {})) {
+        if (k.startsWith('alt_')) alt[k.slice(4)] = v;
+      }
+      return {
+        key: o.key.slice(`${site.prefix}/media/`.length),
+        size: o.size,
+        uploaded: o.uploaded.toISOString(),
+        contentType: o.httpMetadata?.contentType ?? '',
+        alt,
+      };
+    })
+    .sort((a, b) => b.uploaded.localeCompare(a.uploaded));
+}
+
+export interface ContentBundle {
+  version: 1;
+  site: string;
+  exportedAt: string;
+  files: Record<string, string>;
+}
+
+/** Exports all markdown + schema under the site prefix (revisions excluded). */
+export async function exportContent(env: Env, site: Site): Promise<ContentBundle> {
+  const files: Record<string, string> = {};
+  let cursor: string | undefined;
+  do {
+    const listed = await env.CONTENT.list({ prefix: `${site.prefix}/`, limit: 1000, cursor });
+    for (const o of listed.objects) {
+      const relative = o.key.slice(site.prefix.length + 1);
+      if (relative.startsWith('revisions/')) continue;
+      const object = await env.CONTENT.get(o.key);
+      if (object) files[relative] = await object.text();
+    }
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+  return { version: 1, site: site.prefix, exportedAt: new Date().toISOString(), files };
+}
+
+/** Writes a previously exported bundle back under the site prefix. */
+export async function importContent(env: Env, site: Site, bundle: ContentBundle): Promise<number> {
+  let count = 0;
+  for (const [relative, text] of Object.entries(bundle.files)) {
+    if (relative.includes('..') || relative.startsWith('/')) continue;
+    await env.CONTENT.put(`${site.prefix}/${relative}`, text);
+    count++;
+  }
+  return count;
+}
+
 export async function deleteEntry(
   env: Env,
   site: Site,
