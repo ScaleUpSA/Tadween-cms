@@ -1,0 +1,50 @@
+---
+interface Props {
+  lang: string;
+  title: string;
+}
+const { lang, title } = Astro.props;
+const dir = lang === 'ar' ? 'rtl' : 'ltr';
+const other = lang === 'ar' ? 'en' : 'ar';
+---
+
+<html lang={lang} dir={dir}>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, 'Segoe UI', Tahoma, sans-serif;
+        line-height: 1.7;
+        color: #1a1a1a;
+      }
+      nav {
+        display: flex;
+        justify-content: space-between;
+        padding: 1rem 2rem;
+        border-bottom: 1px solid #eee;
+      }
+      main {
+        max-width: 46rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      a {
+        color: #0f6b4f;
+      }
+    </style>
+  </head>
+  <body>
+    <nav>
+      <a href={`/${lang}`}>{lang === 'ar' ? 'الرئيسية' : 'Home'}</a>
+      <span>
+        <a href={`/${lang}/blog`}>{lang === 'ar' ? 'المدونة' : 'Blog'}</a>
+        {' · '}
+        <a href={`/${other}`}>{other === 'ar' ? 'العربية' : 'English'}</a>
+      </span>
+    </nav>
+    <main><slot /></main>
+  </body>
+</html>

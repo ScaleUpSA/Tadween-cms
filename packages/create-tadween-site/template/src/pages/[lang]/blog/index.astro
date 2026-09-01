@@ -1,0 +1,21 @@
+---
+import { getCollection } from '@tadween/astro';
+import Base from '../../../layouts/Base.astro';
+
+const lang = Astro.params.lang === 'en' ? 'en' : 'ar';
+const posts = await getCollection('blog', lang);
+posts.sort((a, b) => String(b.data.date ?? '').localeCompare(String(a.data.date ?? '')));
+---
+
+<Base lang={lang} title={lang === 'ar' ? 'المدونة' : 'Blog'}>
+  <h1>{lang === 'ar' ? 'المدونة' : 'Blog'}</h1>
+  <ul>
+    {
+      posts.map((post) => (
+        <li>
+          <a href={`/${lang}/blog/${post.slug}`}>{post.data.title}</a>
+        </li>
+      ))
+    }
+  </ul>
+</Base>

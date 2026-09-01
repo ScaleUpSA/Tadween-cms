@@ -1,0 +1,46 @@
+name: Bug report
+description: Something isn't working as expected
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! For security vulnerabilities, please follow [SECURITY.md](../../SECURITY.md) instead of opening an issue.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Dashboard (@tadween/dashboard)
+        - Astro integration (@tadween/astro)
+        - CLI (@tadween/cli)
+        - Scaffolder (create-tadween-site)
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: |
+        Tadween version:
+        Node version:
+        Astro version:
+        Deployed on: (Cloudflare Workers / local wrangler dev)
