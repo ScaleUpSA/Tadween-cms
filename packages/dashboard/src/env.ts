@@ -4,6 +4,10 @@ export interface Env {
   MEDIA: R2Bucket;
   CF_API_TOKEN?: string;
   TADWEEN_PREVIEW_SECRET?: string;
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
+  DASHBOARD_URL?: string;
+  BRAND_NAME?: string;
 }
 
 export interface User {
@@ -19,6 +23,8 @@ export interface Site {
   prefix: string;
   base_url: string;
   zone_id: string;
+  theme_accent: string;
+  logo_url: string;
 }
 
 export interface Session {

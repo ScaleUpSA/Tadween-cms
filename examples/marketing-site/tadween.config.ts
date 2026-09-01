@@ -1,4 +1,4 @@
-import { collection, defineConfig, fields, singleton } from '@tadween/astro';
+import { collection, defineConfig, fields, seoFields, singleton } from '@tadween/astro';
 
 export default defineConfig({
   site: 'example',
@@ -42,6 +42,7 @@ export default defineConfig({
         date: fields.date({ label: { ar: 'التاريخ', en: 'Date' } }),
         cover: fields.image({ label: { ar: 'صورة الغلاف', en: 'Cover image' } }),
         body: fields.markdown({ label: { ar: 'المحتوى', en: 'Content' }, bilingual: true }),
+        ...seoFields(),
       },
     }),
   },

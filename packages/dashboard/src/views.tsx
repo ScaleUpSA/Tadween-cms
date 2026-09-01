@@ -2,7 +2,7 @@ import type { FC, PropsWithChildren } from 'hono/jsx';
 import { splitBody, type CompiledSchema, type ContentType, type Field } from '@tadween/astro';
 import type { Site, User } from './env.js';
 import { dir, t, type UiLang } from './i18n.js';
-import type { AuditRow } from './db.js';
+import type { AuditRow, ScheduledPublish, UserRow } from './db.js';
 import type { EntrySummary, LoadedEntry, MediaFile, RevisionSummary } from './store.js';
 import { bodyField } from './forms.js';
 
@@ -36,20 +36,26 @@ textarea.md{min-height:16rem;font-family:ui-monospace,Consolas,monospace}
 `;
 
 export const Layout: FC<
-  PropsWithChildren<{ lang: UiLang; title?: string; user?: User; site?: Site }>
-> = ({ lang, title, user, site, children }) => (
+  PropsWithChildren<{ lang: UiLang; title?: string; user?: User; site?: Site; brand?: string }>
+> = ({ lang, title, user, site, brand, children }) => (
   <html lang={lang} dir={dir(lang)}>
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="robots" content="noindex" />
-      <title>{title ? `${title} — ${t(lang, 'appName')}` : t(lang, 'appName')}</title>
+      <title>
+        {title ? `${title} — ${brand ?? t(lang, 'appName')}` : (brand ?? t(lang, 'appName'))}
+      </title>
       <style>{CSS}</style>
+      {site?.theme_accent ? <style>{`:root{--accent:${site.theme_accent}}`}</style> : null}
     </head>
     <body>
       <header>
         <div class="row">
-          <span class="brand">{t(lang, 'appName')}</span>
+          {site?.logo_url ? (
+            <img src={site.logo_url} alt="" style="height:28px;border-radius:6px" />
+          ) : null}
+          <span class="brand">{brand ?? t(lang, 'appName')}</span>
           {site ? <a href={`/sites/${site.id}?lang=${lang}`}>{site.name}</a> : null}
         </div>
         <div class="row">
@@ -73,11 +79,16 @@ export const Layout: FC<
   </html>
 );
 
-export const LoginPage: FC<{ lang: UiLang; error?: string }> = ({ lang, error }) => (
+export const LoginPage: FC<{ lang: UiLang; error?: string; notice?: string }> = ({
+  lang,
+  error,
+  notice,
+}) => (
   <Layout lang={lang} title={t(lang, 'login')}>
     <div class="card" style="max-width:26rem;margin:3rem auto">
       <h1>{t(lang, 'login')}</h1>
       {error ? <div class="flash error">{error}</div> : null}
+      {notice ? <div class="flash">{notice}</div> : null}
       <form method="post" action={`/login?lang=${lang}`}>
         <label for="email">{t(lang, 'email')}</label>
         <input id="email" name="email" type="email" required autocomplete="email" />
@@ -92,6 +103,53 @@ export const LoginPage: FC<{ lang: UiLang; error?: string }> = ({ lang, error })
         <div class="actions">
           <button class="btn" type="submit">
             {t(lang, 'login')}
+          </button>
+        </div>
+        <div class="row" style="margin-top:1rem;justify-content:space-between">
+          <button
+            class="btn secondary"
+            type="submit"
+            formaction={`/login/magic?lang=${lang}`}
+            formnovalidate
+          >
+            {t(lang, 'magicLink')}
+          </button>
+          <button
+            class="btn secondary"
+            type="submit"
+            formaction={`/login/reset?lang=${lang}`}
+            formnovalidate
+          >
+            {t(lang, 'forgotPassword')}
+          </button>
+        </div>
+      </form>
+    </div>
+  </Layout>
+);
+
+export const ResetPasswordPage: FC<{ lang: UiLang; token: string; error?: string }> = ({
+  lang,
+  token,
+  error,
+}) => (
+  <Layout lang={lang} title={t(lang, 'resetPassword')}>
+    <div class="card" style="max-width:26rem;margin:3rem auto">
+      <h1>{t(lang, 'resetPassword')}</h1>
+      {error ? <div class="flash error">{error}</div> : null}
+      <form method="post" action={`/login/reset/${token}?lang=${lang}`}>
+        <label for="password">{t(lang, 'newPassword')}</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          required
+          minlength={8}
+          autocomplete="new-password"
+        />
+        <div class="actions">
+          <button class="btn" type="submit">
+            {t(lang, 'resetPassword')}
           </button>
         </div>
       </form>
@@ -118,17 +176,25 @@ export const SitesPage: FC<{ lang: UiLang; user: User; sites: Site[] }> = ({
         ) : null}
       </div>
     ))}
+    {user.role === 'owner' ? (
+      <div class="card row">
+        <a href={`/admin/sites?lang=${lang}`}>{t(lang, 'manageSites')}</a>
+        <a href={`/admin/users?lang=${lang}`}>{t(lang, 'manageUsers')}</a>
+      </div>
+    ) : null}
   </Layout>
 );
 
 const label = (l: { ar: string; en: string }, lang: UiLang) => l[lang] ?? l.ar;
 
-export const SiteHome: FC<{ lang: UiLang; user: User; site: Site; schema: CompiledSchema }> = ({
-  lang,
-  user,
-  site,
-  schema,
-}) => (
+export const SiteHome: FC<{
+  lang: UiLang;
+  user: User;
+  site: Site;
+  schema: CompiledSchema;
+  scheduled: ScheduledPublish[];
+  csrf: string;
+}> = ({ lang, user, site, schema, scheduled, csrf }) => (
   <Layout lang={lang} title={site.name} user={user} site={site}>
     <h1>{t(lang, 'content')}</h1>
     {Object.entries(schema.content).map(([key, type]) => (
@@ -148,6 +214,7 @@ export const SiteHome: FC<{ lang: UiLang; user: User; site: Site; schema: Compil
         </>
       ) : null}
     </div>
+    <ScheduledSection lang={lang} site={site} scheduled={scheduled} csrf={csrf} />
   </Layout>
 );
 
@@ -409,6 +476,20 @@ export const EntryForm: FC<{
             )}
           </div>
         ) : null}
+        <div class="card">
+          <label for="_publish_at">{t(lang, 'schedule')}</label>
+          <div class="row">
+            <input
+              id="_publish_at"
+              name="_publish_at"
+              type="datetime-local"
+              style="max-width:16rem"
+            />
+            <button class="btn secondary" type="submit" name="_action" value="schedule">
+              {t(lang, 'schedule')}
+            </button>
+          </div>
+        </div>
         <div class="actions">
           <button class="btn secondary" type="submit" name="_action" value="draft">
             {t(lang, 'save')}
@@ -639,4 +720,205 @@ export const TransferPage: FC<{
       </form>
     </div>
   </Layout>
+);
+
+export const AdminSitesPage: FC<{
+  lang: UiLang;
+  user: User;
+  sites: Site[];
+  csrf: string;
+  flash?: { text: string; error?: boolean };
+}> = ({ lang, user, sites, csrf, flash }) => (
+  <Layout lang={lang} title={t(lang, 'manageSites')} user={user}>
+    <h1>{t(lang, 'manageSites')}</h1>
+    {flash ? <div class={flash.error ? 'flash error' : 'flash'}>{flash.text}</div> : null}
+    {sites.map((site) => (
+      <div class="card">
+        <form method="post" action={`/admin/sites/${site.id}?lang=${lang}`}>
+          <input type="hidden" name="_csrf" value={csrf} />
+          <div class="row" style="justify-content:space-between">
+            <strong>{site.prefix}</strong>
+          </div>
+          <label>{t(lang, 'siteName')}</label>
+          <input type="text" name="name" value={site.name} required />
+          <label>{t(lang, 'baseUrl')}</label>
+          <input type="text" name="base_url" value={site.base_url} dir="ltr" />
+          <label>{t(lang, 'zoneId')}</label>
+          <input type="text" name="zone_id" value={site.zone_id} dir="ltr" />
+          <label>{t(lang, 'themeAccent')}</label>
+          <input
+            type="text"
+            name="theme_accent"
+            value={site.theme_accent}
+            dir="ltr"
+            placeholder="#0f6b4f"
+          />
+          <label>{t(lang, 'logoUrl')}</label>
+          <input type="text" name="logo_url" value={site.logo_url} dir="ltr" />
+          <div class="actions">
+            <button class="btn" type="submit">
+              {t(lang, 'saveChanges')}
+            </button>
+          </div>
+        </form>
+      </div>
+    ))}
+    <div class="card">
+      <h1>{t(lang, 'addSite')}</h1>
+      <form method="post" action={`/admin/sites?lang=${lang}`}>
+        <input type="hidden" name="_csrf" value={csrf} />
+        <label>{t(lang, 'siteName')}</label>
+        <input type="text" name="name" required />
+        <label>{t(lang, 'sitePrefix')}</label>
+        <input type="text" name="prefix" required pattern="[a-z0-9\-]+" dir="ltr" />
+        <label>{t(lang, 'baseUrl')}</label>
+        <input type="text" name="base_url" dir="ltr" />
+        <label>{t(lang, 'zoneId')}</label>
+        <input type="text" name="zone_id" dir="ltr" />
+        <div class="actions">
+          <button class="btn" type="submit">
+            {t(lang, 'addSite')}
+          </button>
+        </div>
+      </form>
+    </div>
+  </Layout>
+);
+
+export const AdminUsersPage: FC<{
+  lang: UiLang;
+  user: User;
+  users: UserRow[];
+  sites: Site[];
+  csrf: string;
+  flash?: { text: string; error?: boolean };
+}> = ({ lang, user, users, sites, csrf, flash }) => (
+  <Layout lang={lang} title={t(lang, 'manageUsers')} user={user}>
+    <h1>{t(lang, 'manageUsers')}</h1>
+    {flash ? <div class={flash.error ? 'flash error' : 'flash'}>{flash.text}</div> : null}
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>{t(lang, 'email')}</th>
+            <th>{t(lang, 'role')}</th>
+            <th>{t(lang, 'siteAccess')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {users.map((row) => (
+            <tr>
+              <td dir="ltr">{row.email}</td>
+              <td>{row.role === 'owner' ? t(lang, 'roleOwner') : t(lang, 'roleEditor')}</td>
+              <td>
+                {row.role === 'owner' ? (
+                  <span class="muted">—</span>
+                ) : (
+                  <>
+                    {row.grants.map((grant) => (
+                      <form
+                        method="post"
+                        action={`/admin/users/revoke?lang=${lang}`}
+                        style="display:inline-block;margin-inline-end:.5rem"
+                      >
+                        <input type="hidden" name="_csrf" value={csrf} />
+                        <input type="hidden" name="user_id" value={row.id} />
+                        <input type="hidden" name="site_id" value={grant.site_id} />
+                        <span class="badge">
+                          {sites.find((s) => s.id === grant.site_id)?.name ?? grant.site_id} (
+                          {grant.role === 'admin' ? t(lang, 'roleAdmin') : t(lang, 'roleEditor')})
+                        </span>
+                        <button class="btn secondary" type="submit" style="padding:.1rem .5rem">
+                          {t(lang, 'revoke')}
+                        </button>
+                      </form>
+                    ))}
+                    <form
+                      method="post"
+                      action={`/admin/users/grant?lang=${lang}`}
+                      style="display:inline-block"
+                    >
+                      <input type="hidden" name="_csrf" value={csrf} />
+                      <input type="hidden" name="user_id" value={row.id} />
+                      <select name="site_id" style="width:auto">
+                        {sites.map((s) => (
+                          <option value={s.id}>{s.name}</option>
+                        ))}
+                      </select>
+                      <select name="role" style="width:auto">
+                        <option value="editor">{t(lang, 'roleEditor')}</option>
+                        <option value="admin">{t(lang, 'roleAdmin')}</option>
+                      </select>
+                      <button class="btn secondary" type="submit" style="padding:.1rem .5rem">
+                        {t(lang, 'grant')}
+                      </button>
+                    </form>
+                  </>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h1>{t(lang, 'inviteUser')}</h1>
+      <form method="post" action={`/admin/users?lang=${lang}`}>
+        <input type="hidden" name="_csrf" value={csrf} />
+        <label>{t(lang, 'email')}</label>
+        <input type="email" name="email" required dir="ltr" />
+        <label>{t(lang, 'name')}</label>
+        <input type="text" name="name" />
+        <label>{t(lang, 'role')}</label>
+        <select name="role">
+          <option value="editor">{t(lang, 'roleEditor')}</option>
+          <option value="owner">{t(lang, 'roleOwner')}</option>
+        </select>
+        <div class="actions">
+          <button class="btn" type="submit">
+            {t(lang, 'inviteUser')}
+          </button>
+        </div>
+      </form>
+    </div>
+  </Layout>
+);
+
+export const ScheduledSection: FC<{
+  lang: UiLang;
+  site: Site;
+  scheduled: ScheduledPublish[];
+  csrf: string;
+}> = ({ lang, site, scheduled, csrf }) => (
+  <div class="card">
+    <h1>{t(lang, 'scheduledPublishes')}</h1>
+    {scheduled.length === 0 ? (
+      <p class="muted">{t(lang, 'noScheduled')}</p>
+    ) : (
+      <table>
+        <tbody>
+          {scheduled.map((row) => (
+            <tr>
+              <td dir="ltr">
+                {row.type_key}
+                {row.slug ? `/${row.slug}` : ''}
+              </td>
+              <td class="muted" dir="ltr">
+                {row.publish_at.slice(0, 16).replace('T', ' ')}
+              </td>
+              <td style="text-align:end">
+                <form method="post" action={`/sites/${site.id}/_scheduled/cancel?lang=${lang}`}>
+                  <input type="hidden" name="_csrf" value={csrf} />
+                  <input type="hidden" name="id" value={row.id} />
+                  <button class="btn secondary" type="submit">
+                    {t(lang, 'cancel')}
+                  </button>
+                </form>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>
 );

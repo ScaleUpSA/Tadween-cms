@@ -1,21 +1,38 @@
 import { Hono, type Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { createPreviewToken, type CompiledSchema, type ContentType } from '@tadween/astro';
-import { verifyPassword } from './auth.js';
+import { hashPassword, verifyPassword } from './auth.js';
 import {
   audit,
   clearLoginFailures,
+  consumeLoginToken,
+  createLoginToken,
   createSession,
+  createSite,
+  createUser,
   deleteAllSessions,
+  deleteScheduled,
   deleteSession,
+  duePublishes,
   findUserByEmail,
   getSessionUser,
+  getSiteById,
   getSiteForUser,
   isLockedOut,
   listAudit,
+  listScheduled,
+  listSites,
+  listUsers,
+  peekLoginToken,
   recordLoginFailure,
+  removeGrant,
+  schedulePublish,
+  setGrant,
+  setPassword,
   sitesForUser,
+  updateSite,
 } from './db.js';
+import { sendEmail } from './email.js';
 import type { Env, Site, Variables } from './env.js';
 import { parseEntryForm, slugify } from './forms.js';
 import { t, type UiLang } from './i18n.js';
@@ -35,12 +52,15 @@ import {
   type ContentBundle,
 } from './store.js';
 import {
+  AdminSitesPage,
+  AdminUsersPage,
   AuditPage,
   CollectionPage,
   EntryForm,
   Layout,
   LoginPage,
   MediaPage,
+  ResetPasswordPage,
   RevisionsPage,
   SiteHome,
   SitesPage,
@@ -98,6 +118,96 @@ app.post('/login', async (c) => {
   return c.redirect(`/sites?lang=${lang}`);
 });
 
+function dashboardUrl(c: AppContext): string {
+  return (c.env.DASHBOARD_URL ?? new URL(c.req.url).origin).replace(/\/$/, '');
+}
+
+app.post('/login/magic', async (c) => {
+  const lang = uiLang(c);
+  const form = await c.req.formData();
+  const email = String(form.get('email') ?? '')
+    .toLowerCase()
+    .trim();
+  const user = email ? await findUserByEmail(c.env.DB, email) : null;
+  if (user) {
+    const token = await createLoginToken(c.env.DB, user.id, 'magic');
+    const url = `${dashboardUrl(c)}/login/token/${token}?lang=${lang}`;
+    const brand = c.env.BRAND_NAME ?? 'Tadween';
+    await sendEmail(
+      c.env,
+      email,
+      lang === 'ar' ? `رابط الدخول إلى ${brand}` : `Your ${brand} login link`,
+      `<p><a href="${url}">${url}</a></p>`,
+    );
+  }
+  return c.html(<LoginPage lang={lang} notice={t(lang, 'magicLinkSent')} />);
+});
+
+app.get('/login/token/:token', async (c) => {
+  const lang = uiLang(c);
+  const userId = await consumeLoginToken(c.env.DB, c.req.param('token'), 'magic');
+  if (!userId) return c.html(<LoginPage lang={lang} error={t(lang, 'invalidToken')} />, 400);
+  const session = await createSession(c.env.DB, userId);
+  setCookie(c, SESSION_COOKIE, session.id, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Lax',
+    path: '/',
+    expires: new Date(session.expires_at),
+  });
+  return c.redirect(`/sites?lang=${lang}`);
+});
+
+app.post('/login/reset', async (c) => {
+  const lang = uiLang(c);
+  const form = await c.req.formData();
+  const email = String(form.get('email') ?? '')
+    .toLowerCase()
+    .trim();
+  const user = email ? await findUserByEmail(c.env.DB, email) : null;
+  if (user) {
+    const token = await createLoginToken(c.env.DB, user.id, 'reset');
+    const url = `${dashboardUrl(c)}/login/reset/${token}?lang=${lang}`;
+    const brand = c.env.BRAND_NAME ?? 'Tadween';
+    await sendEmail(
+      c.env,
+      email,
+      lang === 'ar' ? `إعادة تعيين كلمة مرور ${brand}` : `Reset your ${brand} password`,
+      `<p><a href="${url}">${url}</a></p>`,
+    );
+  }
+  return c.html(<LoginPage lang={lang} notice={t(lang, 'magicLinkSent')} />);
+});
+
+app.get('/login/reset/:token', async (c) => {
+  const lang = uiLang(c);
+  const token = c.req.param('token');
+  const valid = await peekLoginToken(c.env.DB, token, 'reset');
+  if (!valid) return c.html(<LoginPage lang={lang} error={t(lang, 'invalidToken')} />, 400);
+  return c.html(<ResetPasswordPage lang={lang} token={token} />);
+});
+
+app.post('/login/reset/:token', async (c) => {
+  const lang = uiLang(c);
+  const form = await c.req.formData();
+  const password = String(form.get('password') ?? '');
+  if (password.length < 8) {
+    return c.html(
+      <ResetPasswordPage
+        lang={lang}
+        token={c.req.param('token')}
+        error={t(lang, 'requiredField')}
+      />,
+      400,
+    );
+  }
+  const userId = await consumeLoginToken(c.env.DB, c.req.param('token'), 'reset');
+  if (!userId) return c.html(<LoginPage lang={lang} error={t(lang, 'invalidToken')} />, 400);
+  await setPassword(c.env.DB, userId, await hashPassword(password));
+  await deleteAllSessions(c.env.DB, userId);
+  return c.html(<LoginPage lang={lang} notice={t(lang, 'passwordUpdated')} />);
+});
+
 // --- session middleware (everything below requires auth) ---
 app.use('*', async (c, next) => {
   const sessionId = getCookie(c, SESSION_COOKIE);
@@ -129,6 +239,122 @@ app.post('/logout', async (c) => {
 
 app.get('/', (c) => c.redirect(`/sites?lang=${c.get('lang')}`));
 
+// --- admin: sites & users (owners only) ---
+app.use('/admin/*', async (c, next) => {
+  if (c.get('user').role !== 'owner') return c.notFound();
+  await next();
+});
+
+app.get('/admin/sites', async (c) => {
+  const sites = await listSites(c.env.DB);
+  return c.html(
+    <AdminSitesPage
+      lang={c.get('lang')}
+      user={c.get('user')}
+      sites={sites}
+      csrf={c.get('session').csrf_token}
+    />,
+  );
+});
+
+app.post('/admin/sites', async (c) => {
+  const form = await c.req.formData();
+  const prefix = String(form.get('prefix') ?? '').trim();
+  const name = String(form.get('name') ?? '').trim();
+  if (!prefix || !name || !/^[a-z0-9-]+$/.test(prefix)) return c.text('invalid site', 400);
+  const site = await createSite(c.env.DB, {
+    name,
+    prefix,
+    base_url: String(form.get('base_url') ?? '').trim(),
+    zone_id: String(form.get('zone_id') ?? '').trim(),
+    theme_accent: '',
+    logo_url: '',
+  });
+  await audit(c.env, c.get('user').id, site.id, 'create-site', prefix);
+  return c.redirect(`/admin/sites?lang=${c.get('lang')}`);
+});
+
+app.post('/admin/sites/:siteId', async (c) => {
+  const site = await getSiteById(c.env.DB, c.req.param('siteId'));
+  if (!site) return c.notFound();
+  const form = await c.req.formData();
+  await updateSite(c.env.DB, {
+    ...site,
+    name: String(form.get('name') ?? site.name).trim() || site.name,
+    base_url: String(form.get('base_url') ?? '').trim(),
+    zone_id: String(form.get('zone_id') ?? '').trim(),
+    theme_accent: String(form.get('theme_accent') ?? '').trim(),
+    logo_url: String(form.get('logo_url') ?? '').trim(),
+  });
+  await audit(c.env, c.get('user').id, site.id, 'update-site', site.prefix);
+  return c.redirect(`/admin/sites?lang=${c.get('lang')}`);
+});
+
+app.get('/admin/users', async (c) => {
+  const [users, sites] = await Promise.all([listUsers(c.env.DB), listSites(c.env.DB)]);
+  return c.html(
+    <AdminUsersPage
+      lang={c.get('lang')}
+      user={c.get('user')}
+      users={users}
+      sites={sites}
+      csrf={c.get('session').csrf_token}
+    />,
+  );
+});
+
+app.post('/admin/users', async (c) => {
+  const lang = c.get('lang');
+  const form = await c.req.formData();
+  const email = String(form.get('email') ?? '')
+    .toLowerCase()
+    .trim();
+  const name = String(form.get('name') ?? '').trim();
+  const role = form.get('role') === 'owner' ? 'owner' : 'editor';
+  if (!email) return c.text('invalid email', 400);
+  const existing = await findUserByEmail(c.env.DB, email);
+  if (!existing) {
+    const invited = await createUser(c.env.DB, {
+      email,
+      name,
+      role,
+      passwordHash: await hashPassword(crypto.randomUUID()),
+    });
+    const token = await createLoginToken(c.env.DB, invited.id, 'reset');
+    const url = `${dashboardUrl(c)}/login/reset/${token}?lang=${lang}`;
+    const brand = c.env.BRAND_NAME ?? 'Tadween';
+    await sendEmail(
+      c.env,
+      email,
+      lang === 'ar' ? `دعوتك إلى ${brand}` : `You've been invited to ${brand}`,
+      `<p><a href="${url}">${url}</a></p>`,
+    );
+    await audit(c.env, c.get('user').id, '', 'invite-user', email);
+  }
+  return c.redirect(`/admin/users?lang=${lang}`);
+});
+
+app.post('/admin/users/grant', async (c) => {
+  const form = await c.req.formData();
+  const userId = String(form.get('user_id') ?? '');
+  const siteId = String(form.get('site_id') ?? '');
+  const role = form.get('role') === 'admin' ? 'admin' : 'editor';
+  if (!userId || !siteId) return c.text('invalid grant', 400);
+  await setGrant(c.env.DB, userId, siteId, role);
+  await audit(c.env, c.get('user').id, siteId, 'grant', `${userId}:${role}`);
+  return c.redirect(`/admin/users?lang=${c.get('lang')}`);
+});
+
+app.post('/admin/users/revoke', async (c) => {
+  const form = await c.req.formData();
+  const userId = String(form.get('user_id') ?? '');
+  const siteId = String(form.get('site_id') ?? '');
+  if (!userId || !siteId) return c.text('invalid grant', 400);
+  await removeGrant(c.env.DB, userId, siteId);
+  await audit(c.env, c.get('user').id, siteId, 'revoke', userId);
+  return c.redirect(`/admin/users?lang=${c.get('lang')}`);
+});
+
 app.get('/sites', async (c) => {
   const sites = await sitesForUser(c.env.DB, c.get('user'));
   if (sites.length === 1 && sites[0])
@@ -159,7 +385,25 @@ app.get('/sites/:siteId', async (c) => {
       </Layout>,
     );
   }
-  return c.html(<SiteHome lang={c.get('lang')} user={c.get('user')} site={site} schema={schema} />);
+  const scheduled = await listScheduled(c.env.DB, site.id);
+  return c.html(
+    <SiteHome
+      lang={c.get('lang')}
+      user={c.get('user')}
+      site={site}
+      schema={schema}
+      scheduled={scheduled}
+      csrf={c.get('session').csrf_token}
+    />,
+  );
+});
+
+app.post('/sites/:siteId/_scheduled/cancel', async (c) => {
+  const site = c.get('site');
+  const form = await c.req.formData();
+  const id = String(form.get('id') ?? '');
+  if (id) await deleteScheduled(c.env.DB, id);
+  return c.redirect(`/sites/${site.id}?lang=${c.get('lang')}`);
 });
 
 interface TypeContext {
@@ -498,6 +742,23 @@ async function handleWrite(c: AppContext, slugParam?: string): Promise<Response>
   }
 
   const target = type.type === 'singleton' ? typeKey : `${typeKey}/${slug}`;
+  if (action === 'schedule') {
+    const publishAtRaw = String(form.get('_publish_at') ?? '');
+    const publishAt = publishAtRaw ? new Date(publishAtRaw) : null;
+    if (!publishAt || Number.isNaN(publishAt.getTime())) {
+      return c.text('Invalid publish time', 400);
+    }
+    await saveDraft(c.env, site, typeKey, type, slug, data, body);
+    await schedulePublish(c.env.DB, {
+      site_id: site.id,
+      type_key: typeKey,
+      slug: slug ?? '',
+      publish_at: publishAt.toISOString(),
+      created_by: c.get('user').id,
+    });
+    await audit(c.env, c.get('user').id, site.id, 'schedule', target);
+    return c.redirect(`/sites/${site.id}?lang=${lang}`);
+  }
   if (action === 'publish') {
     await publishEntry(c.env, site, typeKey, type, slug, data, body);
     await audit(c.env, c.get('user').id, site.id, 'publish', target);
@@ -544,4 +805,50 @@ app.post('/sites/:siteId/upload', async (c) => {
   return c.json({ key, url: `/_tadween/media/${key}` });
 });
 
-export default app;
+async function runScheduled(env: Env): Promise<void> {
+  const due = await duePublishes(env.DB);
+  for (const row of due) {
+    try {
+      const site = await getSiteById(env.DB, row.site_id);
+      if (!site) {
+        await deleteScheduled(env.DB, row.id);
+        continue;
+      }
+      const schema = await loadSchema(env, site);
+      const type = schema?.content[row.type_key];
+      if (!schema || !type) {
+        await deleteScheduled(env.DB, row.id);
+        continue;
+      }
+      const slug = type.type === 'singleton' ? undefined : row.slug;
+      const entry = await loadEntry(env, site, row.type_key, type, slug);
+      if (entry.exists) {
+        await publishEntry(env, site, row.type_key, type, slug, entry.data, entry.body);
+        await audit(
+          env,
+          row.created_by,
+          site.id,
+          'scheduled-publish',
+          type.type === 'singleton' ? row.type_key : `${row.type_key}/${row.slug}`,
+        );
+        const purge = await purgePublish(
+          env.CF_API_TOKEN,
+          site,
+          schema,
+          row.type_key,
+          type.type === 'singleton' ? row.type_key : row.slug,
+        );
+        if (!purge.ok && purge.detail) console.warn(`[tadween] ${purge.detail}`);
+      }
+      await deleteScheduled(env.DB, row.id);
+    } catch (err) {
+      console.warn(`[tadween] scheduled publish failed for ${row.id}:`, err);
+    }
+  }
+}
+
+export default {
+  fetch: app.fetch,
+  scheduled: (_event: ScheduledEvent, env: Env, ctx: ExecutionContext) =>
+    ctx.waitUntil(runScheduled(env)),
+};
