@@ -1,0 +1,15 @@
+---
+import { getEntry, imageUrl } from '@tadween/astro';
+import Base from '../../../layouts/Base.astro';
+
+const lang = Astro.params.lang === 'en' ? 'en' : 'ar';
+const post = await getEntry('blog', Astro.params.slug ?? '', lang);
+if (!post) return new Response('Not found', { status: 404 });
+const cover = post.data.cover as string | undefined;
+---
+
+<Base lang={lang} title={String(post.data.title ?? '')}>
+  <h1>{post.data.title}</h1>
+  {cover && <img src={imageUrl(cover, { width: 800, format: 'auto' })} alt="" style="max-width:100%" />}
+  <article set:html={post.html} />
+</Base>

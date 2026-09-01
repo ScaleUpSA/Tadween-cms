@@ -1,0 +1,27 @@
+{
+  "name": "@tadween/cli",
+  "version": "0.1.0",
+  "description": "Tadween CLI — provision and manage Tadween for an Astro project",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "tadween": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@tadween/astro": "workspace:*",
+    "jiti": "^2.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.2"
+  }
+}

@@ -1,0 +1,22 @@
+# Tadween dashboard Worker.
+# `npx tadween init` fills in the resource IDs; edit hostnames as needed.
+name = "tadween-dashboard"
+main = "src/index.tsx"
+compatibility_date = "2026-08-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "tadween"
+database_id = "REPLACE_WITH_D1_ID"
+
+[[r2_buckets]]
+binding = "CONTENT"
+bucket_name = "tadween-content"
+
+[[r2_buckets]]
+binding = "MEDIA"
+bucket_name = "tadween-media"
+
+# Secrets (set with `wrangler secret put <NAME>`):
+#   CF_API_TOKEN            - zone token with Cache Purge permission (for purge-on-publish)
+#   TADWEEN_PREVIEW_SECRET  - random string shared with each site worker (for preview links)

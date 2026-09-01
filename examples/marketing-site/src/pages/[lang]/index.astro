@@ -1,0 +1,30 @@
+---
+import { getSingleton, imageUrl } from '@tadween/astro';
+import Base from '../../layouts/Base.astro';
+
+const lang = Astro.params.lang === 'en' ? 'en' : 'ar';
+const home = await getSingleton('home', lang);
+if (!home) return new Response('Not found', { status: 404 });
+
+interface Service {
+  [key: string]: unknown;
+}
+const services = (home.data.services as Service[] | undefined) ?? [];
+const heroImage = home.data.heroImage as string | undefined;
+---
+
+<Base lang={lang} title={String(home.data.heroTitle ?? '')}>
+  <h1>{home.data.heroTitle}</h1>
+  <p>{home.data.heroSubtitle}</p>
+  {heroImage && <img src={imageUrl(heroImage, { width: 800, format: 'auto' })} alt="" style="max-width:100%" />}
+  <ul>
+    {
+      services.map((service) => (
+        <li>
+          <strong>{service[`name_${lang}`] ?? service.name}</strong>
+          <p>{service[`description_${lang}`] ?? service.description}</p>
+        </li>
+      ))
+    }
+  </ul>
+</Base>
