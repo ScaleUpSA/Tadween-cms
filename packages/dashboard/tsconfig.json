@@ -4,7 +4,7 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx",
-    "types": ["@cloudflare/workers-types"]
+    "types": ["@cloudflare/workers-types/2023-07-01"]
   },
   "include": ["src"]
 }

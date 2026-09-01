@@ -2,7 +2,8 @@ import type { FC, PropsWithChildren } from 'hono/jsx';
 import { splitBody, type CompiledSchema, type ContentType, type Field } from '@tadween/astro';
 import type { Site, User } from './env.js';
 import { dir, t, type UiLang } from './i18n.js';
-import type { EntrySummary, LoadedEntry } from './store.js';
+import type { AuditRow } from './db.js';
+import type { EntrySummary, LoadedEntry, MediaFile, RevisionSummary } from './store.js';
 import { bodyField } from './forms.js';
 
 const CSS = `
@@ -59,6 +60,9 @@ export const Layout: FC<
             <form method="post" action="/logout">
               <button class="btn secondary" type="submit">
                 {t(lang, 'logout')}
+              </button>
+              <button class="btn secondary" type="submit" name="all" value="1">
+                {t(lang, 'logoutAll')}
               </button>
             </form>
           ) : null}
@@ -135,6 +139,15 @@ export const SiteHome: FC<{ lang: UiLang; user: User; site: Site; schema: Compil
         <span class="muted">{type.type === 'singleton' ? '—' : ''}</span>
       </div>
     ))}
+    <div class="card row">
+      <a href={`/sites/${site.id}/_media?lang=${lang}`}>{t(lang, 'mediaLibrary')}</a>
+      {user.role === 'owner' ? (
+        <>
+          <a href={`/sites/${site.id}/_audit?lang=${lang}`}>{t(lang, 'auditLog')}</a>
+          <a href={`/sites/${site.id}/_transfer?lang=${lang}`}>{t(lang, 'transfer')}</a>
+        </>
+      ) : null}
+    </div>
   </Layout>
 );
 
@@ -182,6 +195,18 @@ export const CollectionPage: FC<{
   </Layout>
 );
 
+const hijri = (iso: string): string => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat('ar-SA-u-ca-islamic-umalqura', { dateStyle: 'long' }).format(
+      date,
+    );
+  } catch {
+    return '';
+  }
+};
+
 const FieldInput: FC<{
   name: string;
   inputName: string;
@@ -189,7 +214,8 @@ const FieldInput: FC<{
   value: unknown;
   lang: UiLang;
   localeTag?: string;
-}> = ({ inputName, field, value, localeTag }) => {
+  refOptions?: Record<string, { value: string; label: string }[]>;
+}> = ({ name, inputName, field, value, localeTag, refOptions }) => {
   const val = value === undefined || value === null ? '' : String(value);
   switch (field.kind) {
     case 'textarea':
@@ -204,8 +230,26 @@ const FieldInput: FC<{
       return <input type="number" name={inputName} value={val} />;
     case 'boolean':
       return <input type="checkbox" name={inputName} checked={value === true} />;
-    case 'date':
-      return <input type="date" name={inputName} value={val.slice(0, 10)} />;
+    case 'date': {
+      const hijriText = val ? hijri(val) : '';
+      return (
+        <>
+          <input type="date" name={inputName} value={val.slice(0, 10)} />
+          {hijriText ? <span class="muted">{hijriText}</span> : null}
+        </>
+      );
+    }
+    case 'reference':
+      return (
+        <select name={inputName}>
+          <option value=""></option>
+          {(refOptions?.[name] ?? []).map((o) => (
+            <option value={o.value} selected={val === o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      );
     case 'select':
       return (
         <select name={inputName}>
@@ -238,7 +282,21 @@ export const EntryForm: FC<{
   csrf: string;
   flash?: { text: string; error?: boolean };
   previewUrl?: string;
-}> = ({ lang, user, site, schema, typeKey, type, slug, entry, csrf, flash, previewUrl }) => {
+  refOptions?: Record<string, { value: string; label: string }[]>;
+}> = ({
+  lang,
+  user,
+  site,
+  schema,
+  typeKey,
+  type,
+  slug,
+  entry,
+  csrf,
+  flash,
+  previewUrl,
+  refOptions,
+}) => {
   const isNew = type.type === 'collection' && !slug;
   const action = `/sites/${site.id}/${typeKey}/${isNew ? 'new' : (slug ?? '_singleton')}?lang=${lang}`;
   const body = bodyField(type);
@@ -258,6 +316,14 @@ export const EntryForm: FC<{
           {previewUrl ? (
             <a class="btn secondary" href={previewUrl} target="_blank">
               {t(lang, 'preview')}
+            </a>
+          ) : null}
+          {entry.exists ? (
+            <a
+              class="btn secondary"
+              href={`/sites/${site.id}/${typeKey}/${type.type === 'singleton' ? typeKey : slug}/revisions?lang=${lang}`}
+            >
+              {t(lang, 'revisions')}
             </a>
           ) : null}
         </div>
@@ -289,6 +355,7 @@ export const EntryForm: FC<{
                         field={field}
                         value={entry.data[`${name}_${locale}`]}
                         lang={lang}
+                        refOptions={refOptions}
                       />
                     </>
                   ))}
@@ -304,6 +371,7 @@ export const EntryForm: FC<{
                   field={field}
                   value={entry.data[name]}
                   lang={lang}
+                  refOptions={refOptions}
                 />
               </>
             );
@@ -364,3 +432,211 @@ export const EntryForm: FC<{
     </Layout>
   );
 };
+
+export const RevisionsPage: FC<{
+  lang: UiLang;
+  user: User;
+  site: Site;
+  typeKey: string;
+  type: ContentType;
+  slug?: string;
+  revisions: RevisionSummary[];
+  csrf: string;
+}> = ({ lang, user, site, typeKey, type, slug, revisions, csrf }) => {
+  const backPath =
+    type.type === 'singleton'
+      ? `/sites/${site.id}/${typeKey}?lang=${lang}`
+      : `/sites/${site.id}/${typeKey}/${slug}?lang=${lang}`;
+  const revertPath = `/sites/${site.id}/${typeKey}/${type.type === 'singleton' ? typeKey : slug}/revert?lang=${lang}`;
+  return (
+    <Layout lang={lang} title={t(lang, 'revisions')} user={user} site={site}>
+      <div class="row" style="justify-content:space-between">
+        <h1>{t(lang, 'revisions')}</h1>
+        <a class="btn secondary" href={backPath}>
+          {t(lang, 'edit')}
+        </a>
+      </div>
+      <div class="card">
+        {revisions.length === 0 ? (
+          <p class="muted">{t(lang, 'noRevisions')}</p>
+        ) : (
+          <table>
+            <tbody>
+              {revisions.map((rev) => (
+                <tr>
+                  <td dir="ltr">{rev.timestamp}</td>
+                  <td style="text-align:end">
+                    <form method="post" action={revertPath}>
+                      <input type="hidden" name="_csrf" value={csrf} />
+                      <input type="hidden" name="rev" value={rev.key} />
+                      <button
+                        class="btn secondary"
+                        type="submit"
+                        onclick={`return confirm('${t(lang, 'revertConfirm')}')`}
+                      >
+                        {t(lang, 'revert')}
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </Layout>
+  );
+};
+
+export const MediaPage: FC<{
+  lang: UiLang;
+  user: User;
+  site: Site;
+  files: MediaFile[];
+  csrf: string;
+  flash?: { text: string; error?: boolean };
+}> = ({ lang, user, site, files, csrf, flash }) => (
+  <Layout lang={lang} title={t(lang, 'mediaLibrary')} user={user} site={site}>
+    <h1>{t(lang, 'mediaLibrary')}</h1>
+    {flash ? <div class={flash.error ? 'flash error' : 'flash'}>{flash.text}</div> : null}
+    <div class="card">
+      <form
+        method="post"
+        action={`/sites/${site.id}/_media?lang=${lang}`}
+        enctype="multipart/form-data"
+      >
+        <input type="hidden" name="_csrf" value={csrf} />
+        <div class="row">
+          <input type="file" name="file" accept="image/*" required />
+        </div>
+        <label>
+          {t(lang, 'altText')} <span class="locale-tag">ar</span>
+        </label>
+        <input type="text" name="alt__ar" dir="auto" />
+        <label>
+          {t(lang, 'altText')} <span class="locale-tag">en</span>
+        </label>
+        <input type="text" name="alt__en" dir="auto" />
+        <div class="actions">
+          <button class="btn" type="submit">
+            {t(lang, 'upload')}
+          </button>
+        </div>
+      </form>
+    </div>
+    <div class="card">
+      <p class="muted">{t(lang, 'copyKey')}</p>
+      {files.length === 0 ? (
+        <p class="muted">{t(lang, 'noMedia')}</p>
+      ) : (
+        <table>
+          <tbody>
+            {files.map((file) => (
+              <tr>
+                <td style="width:72px">
+                  {file.contentType.startsWith('image/') ? (
+                    <img
+                      src={`/sites/${site.id}/_media/file/${file.key}`}
+                      alt={file.alt[lang] ?? ''}
+                      style="width:64px;height:48px;object-fit:cover;border-radius:6px"
+                    />
+                  ) : null}
+                </td>
+                <td>
+                  <code dir="ltr">{file.key}</code>
+                  {file.alt.ar || file.alt.en ? (
+                    <div class="muted">{file.alt[lang] ?? file.alt.ar ?? file.alt.en}</div>
+                  ) : null}
+                </td>
+                <td class="muted" dir="ltr">
+                  {(file.size / 1024).toFixed(0)} KB
+                </td>
+                <td style="text-align:end">
+                  <form method="post" action={`/sites/${site.id}/_media/delete?lang=${lang}`}>
+                    <input type="hidden" name="_csrf" value={csrf} />
+                    <input type="hidden" name="key" value={file.key} />
+                    <button
+                      class="btn danger"
+                      type="submit"
+                      onclick={`return confirm('${t(lang, 'deleteConfirm')}')`}
+                    >
+                      {t(lang, 'delete')}
+                    </button>
+                  </form>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  </Layout>
+);
+
+export const AuditPage: FC<{ lang: UiLang; user: User; site: Site; rows: AuditRow[] }> = ({
+  lang,
+  user,
+  site,
+  rows,
+}) => (
+  <Layout lang={lang} title={t(lang, 'auditLog')} user={user} site={site}>
+    <h1>{t(lang, 'auditLog')}</h1>
+    <div class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>{t(lang, 'when')}</th>
+            <th>{t(lang, 'who')}</th>
+            <th>{t(lang, 'action')}</th>
+            <th>{t(lang, 'target')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr>
+              <td class="muted" dir="ltr">
+                {row.created_at.slice(0, 19).replace('T', ' ')}
+              </td>
+              <td dir="ltr">{row.email}</td>
+              <td>{row.action}</td>
+              <td dir="ltr">{row.target}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </Layout>
+);
+
+export const TransferPage: FC<{
+  lang: UiLang;
+  user: User;
+  site: Site;
+  csrf: string;
+  flash?: { text: string; error?: boolean };
+}> = ({ lang, user, site, csrf, flash }) => (
+  <Layout lang={lang} title={t(lang, 'transfer')} user={user} site={site}>
+    <h1>{t(lang, 'transfer')}</h1>
+    {flash ? <div class={flash.error ? 'flash error' : 'flash'}>{flash.text}</div> : null}
+    <div class="card">
+      <a class="btn" href={`/sites/${site.id}/_export.json?lang=${lang}`} download>
+        {t(lang, 'exportContent')}
+      </a>
+    </div>
+    <div class="card">
+      <form
+        method="post"
+        action={`/sites/${site.id}/_import?lang=${lang}`}
+        enctype="multipart/form-data"
+      >
+        <input type="hidden" name="_csrf" value={csrf} />
+        <input type="file" name="bundle" accept="application/json" required />
+        <div class="actions">
+          <button class="btn" type="submit">
+            {t(lang, 'importContent')}
+          </button>
+        </div>
+      </form>
+    </div>
+  </Layout>
+);

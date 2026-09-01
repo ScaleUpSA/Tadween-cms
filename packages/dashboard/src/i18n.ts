@@ -35,6 +35,30 @@ const strings = {
   requiredField: { ar: 'هذا الحقل مطلوب', en: 'This field is required' },
   openSite: { ar: 'فتح الموقع', en: 'Open site' },
   errNotFound: { ar: 'غير موجود', en: 'Not found' },
+  revisions: { ar: 'الإصدارات السابقة', en: 'Revisions' },
+  revert: { ar: 'استرجاع', en: 'Revert' },
+  revertConfirm: {
+    ar: 'سيتم نشر هذا الإصدار مكان النسخة الحالية. متابعة؟',
+    en: 'This revision will be published in place of the current version. Continue?',
+  },
+  noRevisions: { ar: 'لا توجد إصدارات سابقة', en: 'No previous revisions' },
+  mediaLibrary: { ar: 'مكتبة الوسائط', en: 'Media library' },
+  altText: { ar: 'النص البديل', en: 'Alt text' },
+  copyKey: {
+    ar: 'انسخ المعرّف لاستخدامه في حقول الصور',
+    en: 'Copy the key to use in image fields',
+  },
+  noMedia: { ar: 'لا توجد ملفات بعد', en: 'No files yet' },
+  auditLog: { ar: 'سجل النشاط', en: 'Activity log' },
+  who: { ar: 'المستخدم', en: 'User' },
+  action: { ar: 'الإجراء', en: 'Action' },
+  target: { ar: 'العنصر', en: 'Item' },
+  when: { ar: 'الوقت', en: 'When' },
+  transfer: { ar: 'تصدير / استيراد', en: 'Export / import' },
+  exportContent: { ar: 'تصدير المحتوى', en: 'Export content' },
+  importContent: { ar: 'استيراد المحتوى', en: 'Import content' },
+  importDone: { ar: 'تم الاستيراد', en: 'Import complete' },
+  logoutAll: { ar: 'تسجيل الخروج من كل الأجهزة', en: 'Log out of all devices' },
 } as const;
 
 export type StringKey = keyof typeof strings;

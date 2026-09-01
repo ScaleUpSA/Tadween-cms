@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { pbkdf2Sync, randomBytes, randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { createJiti } from 'jiti';
 import { compileSchema, type TadweenConfig } from '@tadween/astro';
@@ -99,6 +99,57 @@ async function addSite(): Promise<void> {
   console.log(`Registered site "${name}" (${id}) with prefix "${config.site}"`);
 }
 
+function walkFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walkFiles(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+async function exportContent(): Promise<void> {
+  const config = await loadConfig();
+  const dir = resolve(process.argv[4] ?? 'content');
+  const outFile = resolve(process.argv[3] ?? `tadween-${config.site}.json`);
+  const files: Record<string, string> = {};
+  for (const file of walkFiles(dir)) {
+    files[`content/${relative(dir, file).split(sep).join('/')}`] = readFileSync(file, 'utf8');
+  }
+  const bundle = {
+    version: 1,
+    site: config.site,
+    exportedAt: new Date().toISOString(),
+    files,
+  };
+  writeFileSync(outFile, JSON.stringify(bundle, null, 2));
+  console.log(`Exported ${Object.keys(files).length} files to ${outFile}`);
+  console.log('Upload this bundle from the dashboard (Export / import) to push it to R2.');
+}
+
+async function importContent(): Promise<void> {
+  const bundleFile = process.argv[3];
+  if (!bundleFile) throw new Error('usage: tadween import <bundle.json> [dir]');
+  const dir = resolve(process.argv[4] ?? '.');
+  const bundle = JSON.parse(readFileSync(resolve(bundleFile), 'utf8')) as {
+    version: number;
+    files: Record<string, string>;
+  };
+  if (bundle.version !== 1 || typeof bundle.files !== 'object' || bundle.files === null) {
+    throw new Error('invalid bundle');
+  }
+  let count = 0;
+  for (const [rel, text] of Object.entries(bundle.files)) {
+    if (rel.includes('..') || rel.startsWith('/')) continue;
+    const target = join(dir, rel);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, text);
+    count++;
+  }
+  console.log(`Wrote ${count} files under ${dir}`);
+}
+
 async function init(): Promise<void> {
   console.log('Provisioning Tadween resources (requires wrangler login)...');
   for (const bucket of [CONTENT_BUCKET, MEDIA_BUCKET]) {
@@ -130,6 +181,8 @@ const commands: Record<string, () => Promise<void>> = {
   'push-schema': pushSchema,
   'create-user': createUser,
   'add-site': addSite,
+  export: exportContent,
+  import: importContent,
 };
 
 const run = commands[command ?? ''];
