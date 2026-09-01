@@ -6,7 +6,7 @@
 
 _Tadween (تدوين) — the Arabic word for writing things down and recording them: exactly what this tool does._
 
-[Documentation](#) · [Quick Start](#quick-start) · [Architecture](./ARCHITECTURE.md) · [العربية](#)
+[Quick Start](#quick-start) · [Architecture](./ARCHITECTURE.md) · [Contributing](./CONTRIBUTING.md) · [العربية](./README.ar.md)
 
 An open-source product by [ScaleUp](https://scaleup.sa)
 
@@ -63,7 +63,10 @@ Agencies and freelancers who **sell Astro marketing sites** and need to hand cli
 ## Quick start
 
 ```bash
-# In your Astro project
+# New project (recommended)
+npm create tadween-site my-site
+
+# Or in an existing Astro project
 npx tadween init          # provisions R2 + dashboard worker, writes tadween.config.ts
 npm i @tadween/astro
 ```
@@ -131,6 +134,10 @@ const post = await getEntry("blog", Astro.params.slug, Astro.params.lang);
 - Media uploads to R2 with Cloudflare Image Transformations
 - Zod-validated frontmatter — malformed content can never break the site
 - Zero-downtime: the site serves cached pages even if the dashboard is down
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md). Security issues: [SECURITY.md](./SECURITY.md).
 
 ## License
 
